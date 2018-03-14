@@ -549,9 +549,9 @@ void AmclNode::reconfigureCB(AMCLConfig &config, uint32_t level)
   pf_init_pose_mean.v[1] = last_published_pose.pose.pose.position.y;
   pf_init_pose_mean.v[2] = tf::getYaw(last_published_pose.pose.pose.orientation);
   pf_matrix_t pf_init_pose_cov = pf_matrix_zero();
-  pf_init_pose_cov.m[0][0] = last_published_pose.pose.covariance[6*0+0];
-  pf_init_pose_cov.m[1][1] = last_published_pose.pose.covariance[6*1+1];
-  pf_init_pose_cov.m[2][2] = last_published_pose.pose.covariance[6*5+5];
+  pf_init_pose_cov.m[0][0] = 2;//last_published_pose.pose.covariance[6*0+0];
+  pf_init_pose_cov.m[1][1] = 2;//last_published_pose.pose.covariance[6*1+1];
+  pf_init_pose_cov.m[2][2] = 10;//last_published_pose.pose.covariance[6*5+5];
   pf_init(pf_, pf_init_pose_mean, pf_init_pose_cov);
   pf_init_ = false;
 
@@ -714,9 +714,9 @@ void AmclNode::updatePoseFromServer()
   init_pose_[0] = 0.0;
   init_pose_[1] = 0.0;
   init_pose_[2] = 0.0;
-  init_cov_[0] = 0.5 * 0.5;
-  init_cov_[1] = 0.5 * 0.5;
-  init_cov_[2] = (M_PI/12.0) * (M_PI/12.0);
+  init_cov_[0] = 2;//0.5 * 0.5;
+  init_cov_[1] = 2;//0.5 * 0.5;
+  init_cov_[2] = 10;//(M_PI/12.0) * (M_PI/12.0);
   // Check for NAN on input from param server, #5239
   double tmp_pos;
   private_nh_.param("initial_pose_x", tmp_pos, init_pose_[0]);
@@ -840,9 +840,9 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   pf_init_pose_mean.v[1] = init_pose_[1];
   pf_init_pose_mean.v[2] = init_pose_[2];
   pf_matrix_t pf_init_pose_cov = pf_matrix_zero();
-  pf_init_pose_cov.m[0][0] = init_cov_[0];
-  pf_init_pose_cov.m[1][1] = init_cov_[1];
-  pf_init_pose_cov.m[2][2] = init_cov_[2];
+  pf_init_pose_cov.m[0][0] = 2;//init_cov_[0];
+  pf_init_pose_cov.m[1][1] = 2;//init_cov_[1];
+  pf_init_pose_cov.m[2][2] = 10;//init_cov_[2];
   pf_init(pf_, pf_init_pose_mean, pf_init_pose_cov);
   pf_init_ = false;
 
@@ -1504,7 +1504,9 @@ AmclNode::handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStampe
       pf_init_pose_cov.m[i][j] = msg.pose.covariance[6*i+j];
     }
   }
-  pf_init_pose_cov.m[2][2] = msg.pose.covariance[6*5+5];
+  pf_init_pose_cov.m[0][0] = 2;
+  pf_init_pose_cov.m[1][1] = 2; 
+  pf_init_pose_cov.m[2][2] = 10;//msg.pose.covariance[6*5+5];
 
   delete initial_pose_hyp_;
   initial_pose_hyp_ = new amcl_hyp_t();
