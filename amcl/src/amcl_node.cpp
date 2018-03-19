@@ -24,6 +24,8 @@
 #include <vector>
 #include <map>
 #include <cmath>
+#include <utility>
+#include <iostream>
 
 #include <boost/bind.hpp>
 #include <boost/thread/mutex.hpp>
@@ -816,7 +818,33 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   frame_to_laser_.clear();
 
   map_ = convertMap(msg);
-
+  //andy hough transform
+  std::map<std::pair<int,double>,int> accumulator;
+  double delta_theta = 2 * M_PI / 40;
+  for(int i = 0; i < map_->size_x; i++)
+   for(int j = 0; j < map_->size_y; j++)
+   {
+     if(map_->cells[MAP_INDEX(map_,i,j)].occ_state == 1)
+       for(int k = 0; k < 40;k++)
+       {
+         double phi = k * delta_theta;
+         int r = i * cos(phi) + j * sin(phi);
+         std::pair<int,double> temp = std::make_pair<int,double>(r,phi);
+         if(r >= 0)
+           accumulator[temp]++;
+       }
+   }
+  int line_count = 0;
+  for(std::map<std::pair<int,double>,int>::iterator itr = accumulator.begin();itr != accumulator.end();itr++)
+  {
+    if(itr->second > 40)
+    {
+      line_count++;
+      std::cout << itr->first.first << " " << itr->first.second << std::endl;
+    }
+  }
+  ROS_INFO_STREAM("this is the number of the lines according to hough transform" << line_count);  
+  //end andy
 #if NEW_UNIFORM_SAMPLING
   // Index of free space
   free_space_indices.resize(0);
@@ -1117,7 +1145,8 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
                   fabs(delta.v[1]) > d_thresh_ ||
                   fabs(delta.v[2]) > a_thresh_;
     update = update || m_force_update;
-    m_force_update=false;
+    if(m_force_update)
+      m_force_update=false;
 
     // Set the laser update flags
     if(update)
