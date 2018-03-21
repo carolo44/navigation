@@ -141,14 +141,14 @@ void pf_init(pf_t *pf, pf_vector_t mean, pf_matrix_t cov)
 
   set->sample_count = pf->max_samples;
 
-  //pdf = pf_pdf_gaussian_alloc(mean, cov);
+  pdf = pf_pdf_gaussian_alloc(mean, cov);
     
   // Compute the new sample poses
   for (i = 0; i < set->sample_count; i++)
   {
     sample = set->samples + i;
     sample->weight = 1.0 / pf->max_samples;
-    sample->pose = (pf->random_pose_fn)(pf->random_pose_data);//pf_pdf_gaussian_sample(pdf);
+    sample->pose = pf_pdf_gaussian_sample(pdf);
 
     // Add sample to histogram
     pf_kdtree_insert(set->kdtree, sample->pose, sample->weight);
@@ -156,7 +156,7 @@ void pf_init(pf_t *pf, pf_vector_t mean, pf_matrix_t cov)
 
   pf->w_slow = pf->w_fast = 0.0;
 
-  //pf_pdf_gaussian_free(pdf);
+  pf_pdf_gaussian_free(pdf);
     
   // Re-compute cluster statistics
   pf_cluster_stats(pf, set); 
