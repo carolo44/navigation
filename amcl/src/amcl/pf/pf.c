@@ -29,6 +29,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdio.h>
 
 #include "amcl/pf/pf.h"
 #include "amcl/pf/pf_pdf.h"
@@ -142,7 +143,7 @@ void pf_init(pf_t *pf, pf_vector_t mean, pf_matrix_t cov)
   set->sample_count = pf->max_samples;
 
   pdf = pf_pdf_gaussian_alloc(mean, cov);
-    
+  
   // Compute the new sample poses
   for (i = 0; i < set->sample_count; i++)
   {
@@ -158,6 +159,72 @@ void pf_init(pf_t *pf, pf_vector_t mean, pf_matrix_t cov)
 
   pf_pdf_gaussian_free(pdf);
     
+  // Re-compute cluster statistics
+  pf_cluster_stats(pf, set); 
+
+  //set converged to 0
+  pf_init_converged(pf);
+
+  return;
+}
+
+//andy Initialize the filter using a gaussian with hypothesis
+void pf_init_hypo(pf_t* pf, double hypo[30][4])
+{
+  pf_sample_set_t *set;
+  pf_sample_t *sample;
+  pf_pdf_gaussian_t *pdf;
+  
+  set = pf->sets + pf->current_set;
+  
+  // Create the kd tree for adaptive sampling
+  pf_kdtree_clear(set->kdtree);
+  
+  pf_vector_t mean;
+  pf_matrix_t cov;  
+  cov.m[0][0] = 0.0225;
+  cov.m[1][1] = 0.0225;
+  cov.m[2][2] = 0.09;
+  set->sample_count = 0;
+  int counts = 0;
+
+  for(int i = 0;i < 30;i++)
+  {
+    mean.v[0] = hypo[i][0];
+    mean.v[1] = hypo[i][1];
+    mean.v[2] = hypo[i][3];
+
+    int hypo_samples = pf->max_samples * hypo[i][2];
+    set->sample_count += hypo_samples;    
+    
+    pdf = pf_pdf_gaussian_alloc(mean, cov);
+
+    // Compute the new sample poses
+    for (int j = 0; j < hypo_samples; j++)
+    {
+      sample = set->samples + j + counts;
+      sample->weight = 1.0 / pf->max_samples;
+      sample->pose = pf_pdf_gaussian_sample(pdf);     
+ 
+      // Add sample to histogram
+      pf_kdtree_insert(set->kdtree, sample->pose, sample->weight);
+    }
+    counts += hypo_samples;
+    pf_pdf_gaussian_free(pdf);
+  }
+ 
+  for(;set->sample_count < pf->max_samples;)
+  {
+    sample = set->samples + set->sample_count;
+    sample->weight = 1.0 / pf->max_samples;
+    sample->pose = (pf->random_pose_fn)(pf->random_pose_data);
+    pf_kdtree_insert(set->kdtree, sample->pose, sample->weight);
+    set->sample_count++;
+  } 
+ 
+  pf->w_slow = pf->w_fast = 0.0;
+  
+  
   // Re-compute cluster statistics
   pf_cluster_stats(pf, set); 
 
@@ -480,7 +547,6 @@ void pf_cluster_stats(pf_t *pf, pf_sample_set_t *set)
   double m[4], c[2][2];
   size_t count;
   double weight;
-
   // Cluster the samples
   pf_kdtree_cluster(set->kdtree);
   
