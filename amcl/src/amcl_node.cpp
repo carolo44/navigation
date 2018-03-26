@@ -23,9 +23,10 @@
 #include <algorithm>
 #include <vector>
 #include <map>
-#include <cmath>
+#include <cmath> 
 #include <utility>
 #include <iostream>
+#include <set>
 
 #include <boost/bind.hpp>
 #include <boost/thread/mutex.hpp>
@@ -210,6 +211,10 @@ class AmclNode
     int resample_count_;
     double laser_min_range_;
     double laser_max_range_;
+    
+    //andy test map distance info
+    std::vector<std::pair<std::pair<int,int>,std::vector<double> > > range_map_;
+    std::vector<std::pair<int,int> > available_points;    
 
     //Nomotion update control
     bool m_force_update;  // used to temporarily let amcl update samples even when no motion occurs...
@@ -821,6 +826,28 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   frame_to_laser_.clear();
 
   map_ = convertMap(msg);
+  //andy filtering;
+  for(int i = 0; i < map_->size_x; i += 3)
+    for(int j = 0; j < map_->size_y; j += 3)
+    {
+      if(map_->cells[MAP_INDEX(map_,i,j)].occ_state == -1)
+      {
+        available_points.push_back(std::make_pair<int,int>(i,j));
+      }
+    }
+  for(std::vector<std::pair<int,int> >::iterator itr = available_points.begin();itr != available_points.end();itr++)
+  {
+    std::vector<double> curr_ranges;
+    for(int i = 0;i < 360/*ldata.range_count*/;i++)
+    {
+      double theta = i * 2 * M_PI / 360/*ldata.range_count*/;
+      double ox = MAP_WXGX(map_, itr->first);
+      double oy = MAP_WYGY(map_, itr->second);
+      double range = map_calc_range(map_, ox, oy, theta, 10.0);
+      curr_ranges.push_back(range);
+    }
+    range_map_.push_back(std::make_pair<std::pair<int,int>,std::vector<double> >(std::make_pair<int,int>(itr->first,itr->second),curr_ranges));
+  }
 
 #if NEW_UNIFORM_SAMPLING
   // Index of free space
@@ -1234,8 +1261,10 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     }
      
     if(m_force_update){
+    boost::recursive_mutex::scoped_lock prl(configuration_mutex_);
     //andy global map hough transform
     std::map<std::pair<int,double>,int> map_accumulator;
+    std::set<double> map_lines;
     double delta_theta = 2 * M_PI / ldata.range_count;
     for(int i = 0; i < map_->size_x; i++)
      for(int j = 0; j < map_->size_y; j++)
@@ -1250,43 +1279,87 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
              map_accumulator[temp]++;
          }
      }
-    int line_count = 0;
     for(std::map<std::pair<int,double>,int>::iterator itr = map_accumulator.begin();itr != map_accumulator.end();itr++)
     {
-      if(itr->second > 40)
+      if(itr->second > 30)
       {
-        line_count++;
-        std::cout << "map lines" << itr->first.first << " " << itr->first.second << std::endl;
+        map_lines.insert(itr->first.second);
       }
     } 
     
     //andy local scan hough transform
-    std::map<std::pair<int,double>,int> scan_accumulator;
-     
-    
-
-    //andy filtering
-    int available_point_count = 0;
-    std::vector<std::pair<int,int> > available_points;
-    for(int i = 0; i < map_->size_x; i += 3)
-      for(int j = 0; j < map_->size_y; j += 3)
-      {
-        if(map_->cells[MAP_INDEX(map_,i,j)].occ_state == -1)
-        {
-          available_point_count++;
-          available_points.push_back(std::make_pair<int,int>(i,j));
-        }
-      }
-    
-    /*std::vector<double> laser_sorted;    
+    std::vector<std::pair<int,int> > scan_points;
+    std::map<std::pair<int,double>,int> local_accumulator;
     for(int i = 0;i < ldata.range_count;i++)
     {
-      laser_sorted.push_back(ldata.ranges[i][0]);
-    }   
-    std::sort(laser_sorted.begin(),laser_sorted.end());*/
+      scan_points.push_back(std::make_pair(ldata.ranges[i][0] * std::cos(ldata.ranges[i][1]) / 0.05,ldata.ranges[i][0] * std::sin(ldata.ranges[i][1]) / 0.05));
+    }
+    
+    for(std::vector<std::pair<int,int> >::iterator itr = scan_points.begin();itr != scan_points.end();itr++)
+    {
+      for(int k = 0; k < ldata.range_count;k += 4)
+      {
+        double phi = k * delta_theta;
+        int r = itr->first * cos(phi) + itr->second * sin(phi);
+        std::pair<int,double> temp = std::make_pair<int,double>(r,phi);
+        if(r >= 0)
+          local_accumulator[temp]++;
+      }
+    }
+
+    std::set<double> local_lines;
+
+    for(std::map<std::pair<int,double>,int>::iterator itr = local_accumulator.begin();itr != local_accumulator.end();itr++)
+    {
+    
+      if(itr->second > 20)
+      {
+        local_lines.insert(itr->first.second);
+      }
+    }
+    
+    //no local line detected(try all the angles)
+    if(local_lines.size() == 0)
+    {
+      for(int i = 0;i < ldata.range_count;i += 4)
+        local_lines.insert(i * delta_theta);
+    } 
+    
+    //possible angles
+    std::set<double> possible_angles;
+    for(std::set<double>::iterator map_itr = map_lines.begin();map_itr != map_lines.end();map_itr++)
+    {
+      for(std::set<double>::iterator local_itr = local_lines.begin();local_itr != local_lines.end();local_itr++)
+      {
+        double angle = 0.0;
+        if(*local_itr - *map_itr >= 0)
+          angle = *local_itr - *map_itr;
+        else
+          angle = *local_itr - *map_itr + 2 * M_PI;
+        if(map_itr == map_lines.begin() && local_itr == local_lines.begin())
+          possible_angles.insert(angle);
+        else
+        {
+          bool duplicate = false;
+          for(std::set<double>::iterator angle_itr = possible_angles.begin();angle_itr != possible_angles.end();angle_itr++)
+          {
+            if(std::abs(angle - *angle_itr) < 0.01)
+            {
+              duplicate = true;
+              break;
+            }
+          }
+          if(!duplicate)
+            possible_angles.insert(angle);    
+        }
+      }
+    }
+   
+    for(std::set<double>::iterator itr = possible_angles.begin();itr != possible_angles.end();itr++)
+      std::cout << *itr << std::endl;
 
     //andy test robot "rotation"
-    const int array_size =  ldata.range_count;
+    /*const int array_size =  ldata.range_count;
     double robot_scan[array_size][array_size];
     for(int i = 0;i < array_size;i++)
     {
@@ -1297,60 +1370,78 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
         else
           robot_scan[i][j] = ldata.ranges[j - i][0];
       }
-    } 
+    }*/
+
+    const int angle_num = possible_angles.size();
+    const int array_size =  ldata.range_count;
+    double robot_scan[angle_num][array_size][2];
+    int flag = 0;
+    for(std::set<double>::iterator itr = possible_angles.begin();itr != possible_angles.end();itr++)
+    {
+      int interval = double((*itr) / (2 * M_PI)) * ldata.range_count;
+      for(int j = 0;j < array_size;j++)
+      {
+        if(interval - j > 0)
+          robot_scan[flag][j][0] = ldata.ranges[array_size - (interval - j)][0];
+        else
+          robot_scan[flag][j][0] = ldata.ranges[j - interval][0];
+      }
+      robot_scan[flag][0][1] = *itr;
+      flag++;
+    }
+        
 
     std::vector<std::pair<std::pair<int,int>,std::pair<int,double> > > best_points;
-    for(int i = 0;i < 30;i++)
+    for(int i = 0;i < 50;i++)
       best_points.push_back(std::make_pair<std::pair<int,int>,std::pair<int,double> >(std::make_pair<int,int>(0,0),std::make_pair<int,double>(0,0.0)));
 
-    for(std::vector<std::pair<int,int> >::iterator itr = available_points.begin();itr != available_points.end();itr++)
+    for(std::vector<std::pair<std::pair<int,int>,std::vector<double> > >::iterator itr = range_map_.begin();itr != range_map_.end();itr++)
     {
       std::vector<double> curr_ranges;
-      for(int i = 0;i < ldata.range_count;i++)
+      /*for(int i = 0;i < ldata.range_count;i++)
       {
         double theta = i * 2 * M_PI / ldata.range_count;
         double ox = MAP_WXGX(map_, itr->first);
         double oy = MAP_WYGY(map_, itr->second);
         double range = map_calc_range(map_, ox, oy, theta, ldata.range_max);
         curr_ranges.push_back(range);
-      }
-      //std::sort(curr_ranges.begin(),curr_ranges.end());
-      //double curr_best = 10000.0;
+      }*/
+      curr_ranges = itr->second;
       
       int curr_best = 0;
       double heading_angle = 0.0;
       //angle traverse
-      for(int i = 0; i < array_size;i += 4)
+      for(int i = 0; i < angle_num/*array_size*/;i++)
       {
-        //double sq_distance = 0.0;
+        double sq_distance = 0.0;
         int good_range_count = 0;
         for(int j = 0;j < array_size;j += 6)
         {
-          if(/*std::abs(curr_ranges[j] - robot_scan[i][j]) < 0.1*/curr_ranges[j] - robot_scan[i][j] > -0.15 && curr_ranges[j] - robot_scan[i][j] < 0.15)
+          if(/*std::abs(curr_ranges[j] - robot_scan[i][j]) < 0.1*/curr_ranges[j] - robot_scan[i][j][0] > -0.15 && curr_ranges[j] - robot_scan[i][j][0] < 0.15)
             good_range_count++;
         }
         if(good_range_count > curr_best)
         {
           curr_best = good_range_count;
-          heading_angle = 2 * M_PI / ldata.range_count * i;
+          heading_angle = /*i * 2 * M_PI / ldata.range_count*/robot_scan[i][0][1];
         }
       }
-      if(curr_best > best_points[29].second.first)
+      if(curr_best > best_points[49].second.first)
       {
         best_points.pop_back();
-        best_points.push_back(std::make_pair<std::pair<int,int>,std::pair<int,double> >(std::make_pair<int,int>(itr->first,itr->second),std::make_pair<int,double>(curr_best, heading_angle - M_PI)));
+        best_points.push_back(std::make_pair<std::pair<int,int>,std::pair<int,double> >(std::make_pair<int,int>(itr->first.first,itr->first.second),std::make_pair<int,double>(curr_best, heading_angle - M_PI)));
         std::sort(best_points.begin(),best_points.end(),pointCompare);
       }
     }
     //to calculate the weight of the hypothesis
-    double hypothesis[30][4];
+    double hypothesis[50][4];
     int total_weight = 0;
-    for(int i = 0;i < 30;i++)
+    for(int i = 0;i < 50;i++)
     {
       total_weight += best_points[i].second.first;
     }
 
-    for(int i= 0;i < 30;i++)
+    for(int i= 0;i < 50;i++)
     {
       hypothesis[i][0] = MAP_WXGX(map_, best_points[i].first.first);
       hypothesis[i][1] = MAP_WXGX(map_, best_points[i].first.second);
@@ -1359,6 +1450,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     }
     //andy to draw the particles
     pf_init_hypo(pf_, hypothesis);
+    pf_init_ = false;
   }
     m_force_update = false;
     //end andy

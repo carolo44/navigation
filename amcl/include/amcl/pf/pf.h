@@ -148,7 +148,7 @@ void pf_free(pf_t *pf);
 void pf_init(pf_t *pf, pf_vector_t mean, pf_matrix_t cov);
 
 // andy Initialize the filter with some hypothesis
-void pf_init_hypo(pf_t*, double[30][4]); 
+void pf_init_hypo(pf_t*, double[50][4]); 
 
 // Initialize the filter using some model
 void pf_init_model(pf_t *pf, pf_init_model_fn_t init_fn, void *init_data);

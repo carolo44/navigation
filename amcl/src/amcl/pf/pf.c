@@ -169,7 +169,7 @@ void pf_init(pf_t *pf, pf_vector_t mean, pf_matrix_t cov)
 }
 
 //andy Initialize the filter using a gaussian with hypothesis
-void pf_init_hypo(pf_t* pf, double hypo[30][4])
+void pf_init_hypo(pf_t* pf, double hypo[50][4])
 {
   pf_sample_set_t *set;
   pf_sample_t *sample;
@@ -185,17 +185,17 @@ void pf_init_hypo(pf_t* pf, double hypo[30][4])
   cov.m[0][0] = 0.0225;
   cov.m[1][1] = 0.0225;
   cov.m[2][2] = 0.09;
-  set->sample_count = 0;
+  cov.m[0][1] = cov.m[0][2] = cov.m[1][0] = cov.m[1][2] = cov.m[2][0] = cov.m[2][1] = 0.0;
+  set->sample_count = pf->max_samples;
   int counts = 0;
 
-  for(int i = 0;i < 30;i++)
+  for(int i = 0;i < 50;i++)
   {
     mean.v[0] = hypo[i][0];
     mean.v[1] = hypo[i][1];
     mean.v[2] = hypo[i][3];
 
-    int hypo_samples = pf->max_samples * hypo[i][2];
-    set->sample_count += hypo_samples;    
+    int hypo_samples = pf->max_samples * hypo[i][2];   
     
     pdf = pf_pdf_gaussian_alloc(mean, cov);
 
@@ -213,13 +213,13 @@ void pf_init_hypo(pf_t* pf, double hypo[30][4])
     pf_pdf_gaussian_free(pdf);
   }
  
-  for(;set->sample_count < pf->max_samples;)
+  for(;counts < pf->max_samples;)
   {
-    sample = set->samples + set->sample_count;
+    sample = set->samples + counts;
     sample->weight = 1.0 / pf->max_samples;
     sample->pose = (pf->random_pose_fn)(pf->random_pose_data);
     pf_kdtree_insert(set->kdtree, sample->pose, sample->weight);
-    set->sample_count++;
+    counts++;
   } 
  
   pf->w_slow = pf->w_fast = 0.0;
