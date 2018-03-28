@@ -52,6 +52,7 @@
 #include "nav_msgs/GetMap.h"
 #include "nav_msgs/SetMap.h"
 #include "std_srvs/Empty.h"
+#include "std_msgs/Bool.h"
 
 // For transform support
 #include "tf/transform_broadcaster.h"
@@ -214,7 +215,9 @@ class AmclNode
     
     //andy test map distance info
     std::vector<std::pair<std::pair<int,int>,std::vector<double> > > range_map_;
-    std::vector<std::pair<int,int> > available_points;    
+    std::vector<std::pair<int,int> > available_points;
+    std::map<std::pair<int,double>,int> map_accumulator;
+    std::set<double> map_lines;    
 
     //Nomotion update control
     bool m_force_update;  // used to temporarily let amcl update samples even when no motion occurs...
@@ -248,6 +251,9 @@ class AmclNode
     ros::ServiceServer set_map_srv_;
     ros::Subscriber initial_pose_sub_old_;
     ros::Subscriber map_sub_;
+    
+    //andy publisher
+    ros::Publisher rotate_pub_;
 
     amcl_hyp_t* initial_pose_hyp_;
     bool first_map_received_;
@@ -431,6 +437,9 @@ AmclNode::AmclNode() :
 
   pose_pub_ = nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>("amcl_pose", 2, true);
   particlecloud_pub_ = nh_.advertise<geometry_msgs::PoseArray>("particlecloud", 2, true);
+  //andy publisher
+  rotate_pub_ = nh_.advertise<std_msgs::Bool>("rotate",2);
+
   global_loc_srv_ = nh_.advertiseService("global_localization", 
 					 &AmclNode::globalLocalizationCallback,
                                          this);
@@ -838,7 +847,7 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   for(std::vector<std::pair<int,int> >::iterator itr = available_points.begin();itr != available_points.end();itr++)
   {
     std::vector<double> curr_ranges;
-    for(int i = 0;i < 360/*ldata.range_count*/;i++)
+    for(int i = 0;i < 360/*ldata.range_count*/;i += 6)
     {
       double theta = i * 2 * M_PI / 360/*ldata.range_count*/;
       double ox = MAP_WXGX(map_, itr->first);
@@ -847,6 +856,30 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
       curr_ranges.push_back(range);
     }
     range_map_.push_back(std::make_pair<std::pair<int,int>,std::vector<double> >(std::make_pair<int,int>(itr->first,itr->second),curr_ranges));
+  }
+
+  //andy global map hough transform
+
+  double delta_theta = 2 * M_PI / 360/*ldata.range_count*/;
+  for(int i = 0; i < map_->size_x; i++)
+    for(int j = 0; j < map_->size_y; j++)
+    {
+      if(map_->cells[MAP_INDEX(map_,i,j)].occ_state == 1)
+        for(int k = 0; k < 360/*ldata.range_count*/;k += 4)
+        {
+          double phi = k * delta_theta;
+          int r = i * cos(phi) + j * sin(phi);
+          std::pair<int,double> temp = std::make_pair<int,double>(r,phi);
+          if(r >= 0)
+            map_accumulator[temp]++;
+        }
+    }
+  for(std::map<std::pair<int,double>,int>::iterator itr = map_accumulator.begin();itr != map_accumulator.end();itr++)
+  {
+    if(itr->second > 30)
+    {
+      map_lines.insert(itr->first.second);
+    }
   }
 
 #if NEW_UNIFORM_SAMPLING
@@ -1262,30 +1295,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
      
     if(m_force_update){
     boost::recursive_mutex::scoped_lock prl(configuration_mutex_);
-    //andy global map hough transform
-    std::map<std::pair<int,double>,int> map_accumulator;
-    std::set<double> map_lines;
-    double delta_theta = 2 * M_PI / ldata.range_count;
-    for(int i = 0; i < map_->size_x; i++)
-     for(int j = 0; j < map_->size_y; j++)
-     {
-       if(map_->cells[MAP_INDEX(map_,i,j)].occ_state == 1)
-         for(int k = 0; k < ldata.range_count;k += 4)
-         {
-           double phi = k * delta_theta;
-           int r = i * cos(phi) + j * sin(phi);
-           std::pair<int,double> temp = std::make_pair<int,double>(r,phi);
-           if(r >= 0)
-             map_accumulator[temp]++;
-         }
-     }
-    for(std::map<std::pair<int,double>,int>::iterator itr = map_accumulator.begin();itr != map_accumulator.end();itr++)
-    {
-      if(itr->second > 30)
-      {
-        map_lines.insert(itr->first.second);
-      }
-    } 
+ 
     
     //andy local scan hough transform
     std::vector<std::pair<int,int> > scan_points;
@@ -1294,7 +1304,9 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     {
       scan_points.push_back(std::make_pair(ldata.ranges[i][0] * std::cos(ldata.ranges[i][1]) / 0.05,ldata.ranges[i][0] * std::sin(ldata.ranges[i][1]) / 0.05));
     }
-    
+
+    double delta_theta = 2 * M_PI / 360/*ldata.range_count*/;
+
     for(std::vector<std::pair<int,int> >::iterator itr = scan_points.begin();itr != scan_points.end();itr++)
     {
       for(int k = 0; k < ldata.range_count;k += 4)
@@ -1355,8 +1367,8 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       }
     }
    
-    for(std::set<double>::iterator itr = possible_angles.begin();itr != possible_angles.end();itr++)
-      std::cout << *itr << std::endl;
+    /*for(std::set<double>::iterator itr = possible_angles.begin();itr != possible_angles.end();itr++)
+      std::cout << *itr << std::endl;*/
 
     //andy test robot "rotation"
     /*const int array_size =  ldata.range_count;
@@ -1417,7 +1429,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
         int good_range_count = 0;
         for(int j = 0;j < array_size;j += 6)
         {
-          if(/*std::abs(curr_ranges[j] - robot_scan[i][j]) < 0.1*/curr_ranges[j] - robot_scan[i][j][0] > -0.15 && curr_ranges[j] - robot_scan[i][j][0] < 0.15)
+          if(/*std::abs(curr_ranges[j] - robot_scan[i][j]) < 0.1*/curr_ranges[j / 6] - robot_scan[i][j][0] > -0.15 && curr_ranges[j / 6] - robot_scan[i][j][0] < 0.15)
             good_range_count++;
         }
         if(good_range_count > curr_best)
@@ -1451,6 +1463,10 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     //andy to draw the particles
     pf_init_hypo(pf_, hypothesis);
     pf_init_ = false;
+    //rotation
+    std_msgs::Bool msg;
+    msg.data = true;
+    rotate_pub_.publish(msg);
   }
     m_force_update = false;
     //end andy

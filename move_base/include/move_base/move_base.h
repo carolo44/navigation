@@ -52,6 +52,7 @@
 #include <costmap_2d/costmap_2d_ros.h>
 #include <costmap_2d/costmap_2d.h>
 #include <nav_msgs/GetPlan.h>
+#include "std_msgs/Bool.h"
 
 #include <pluginlib/class_loader.h>
 #include <std_srvs/Empty.h>
@@ -101,6 +102,9 @@ namespace move_base {
        * @return True if processing of the goal is done, false otherwise
        */
       bool executeCycle(geometry_msgs::PoseStamped& goal, std::vector<geometry_msgs::PoseStamped>& global_plan);
+
+      //andy rotate
+      void rotateCB(const std_msgs::Bool::ConstPtr& msg);
 
     private:
       /**
@@ -194,6 +198,10 @@ namespace move_base {
       double conservative_reset_dist_, clearing_radius_;
       ros::Publisher current_goal_pub_, vel_pub_, action_goal_pub_;
       ros::Subscriber goal_sub_;
+
+      //andy rotate subscriber
+      ros::Subscriber rotate_sub_;
+
       ros::ServiceServer make_plan_srv_, clear_costmaps_srv_;
       bool shutdown_costmaps_, clearing_rotation_allowed_, recovery_behavior_enabled_;
       double oscillation_timeout_, oscillation_distance_;

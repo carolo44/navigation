@@ -98,6 +98,9 @@ namespace move_base {
     ros::NodeHandle simple_nh("move_base_simple");
     goal_sub_ = simple_nh.subscribe<geometry_msgs::PoseStamped>("goal", 1, boost::bind(&MoveBase::goalCB, this, _1));
 
+    //andy rotate subscriber
+    rotate_sub_ = private_nh.subscribe<std_msgs::Bool>("/rotate",1,&MoveBase::rotateCB, this);
+
     //we'll assume the radius of the robot to be consistent with what's specified for the costmaps
     private_nh.param("local_costmap/inscribed_radius", inscribed_radius_, 0.325);
     private_nh.param("local_costmap/circumscribed_radius", circumscribed_radius_, 0.46);
@@ -1174,6 +1177,13 @@ namespace move_base {
       planner_costmap_ros_->stop();
       controller_costmap_ros_->stop();
     }
+  }
+
+  //andy rotate
+  void MoveBase::rotateCB(const std_msgs::Bool::ConstPtr& msg)
+  {
+      recovery_behaviors_[1]->runBehavior();
+      ROS_WARN("rotating to determine the pose of the robot");
   }
 
   void findAnotherGoal(unsigned int robotMapx,unsigned int robotMapy,unsigned int& goalMapx,unsigned int& goalMapy,costmap_2d::Costmap2D* cmap,int range)
