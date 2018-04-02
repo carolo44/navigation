@@ -217,7 +217,8 @@ class AmclNode
     std::vector<std::pair<std::pair<int,int>,std::vector<double> > > range_map_;
     std::vector<std::pair<int,int> > available_points;
     std::map<std::pair<int,double>,int> map_accumulator;
-    std::set<double> map_lines;    
+    std::set<double> map_lines;
+    int detection_count;    
 
     //Nomotion update control
     bool m_force_update;  // used to temporarily let amcl update samples even when no motion occurs...
@@ -439,6 +440,9 @@ AmclNode::AmclNode() :
   particlecloud_pub_ = nh_.advertise<geometry_msgs::PoseArray>("particlecloud", 2, true);
   //andy publisher
   rotate_pub_ = nh_.advertise<std_msgs::Bool>("rotate",2);
+
+  //andy initialize the count for localization failure detector
+  detection_count = 0;
 
   global_loc_srv_ = nh_.advertiseService("global_localization", 
 					 &AmclNode::globalLocalizationCallback,
@@ -844,6 +848,7 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
         available_points.push_back(std::make_pair<int,int>(i,j));
       }
     }
+
   for(std::vector<std::pair<int,int> >::iterator itr = available_points.begin();itr != available_points.end();itr++)
   {
     std::vector<double> curr_ranges;
@@ -860,27 +865,27 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
 
   //andy global map hough transform
 
-  double delta_theta = 2 * M_PI / 360/*ldata.range_count*/;
-  for(int i = 0; i < map_->size_x; i++)
-    for(int j = 0; j < map_->size_y; j++)
-    {
-      if(map_->cells[MAP_INDEX(map_,i,j)].occ_state == 1)
-        for(int k = 0; k < 360/*ldata.range_count*/;k += 4)
-        {
-          double phi = k * delta_theta;
-          int r = i * cos(phi) + j * sin(phi);
-          std::pair<int,double> temp = std::make_pair<int,double>(r,phi);
-          if(r >= 0)
-            map_accumulator[temp]++;
-        }
-    }
-  for(std::map<std::pair<int,double>,int>::iterator itr = map_accumulator.begin();itr != map_accumulator.end();itr++)
-  {
-    if(itr->second > 30)
-    {
-      map_lines.insert(itr->first.second);
-    }
-  }
+  //double delta_theta = 2 * M_PI / 360/*ldata.range_count*/;
+  //for(int i = 0; i < map_->size_x; i++)
+  //  for(int j = 0; j < map_->size_y; j++)
+  //  {
+  //    if(map_->cells[MAP_INDEX(map_,i,j)].occ_state == 1)
+  //      for(int k = 0; k < 360/*ldata.range_count*/;k += 4)
+  //      {
+  //        double phi = k * delta_theta;
+  //        int r = i * cos(phi) + j * sin(phi);
+  //        std::pair<int,double> temp = std::make_pair<int,double>(r,phi);
+  //        if(r >= 0)
+  //          map_accumulator[temp]++;
+  //      }
+  //  }
+  //for(std::map<std::pair<int,double>,int>::iterator itr = map_accumulator.begin();itr != map_accumulator.end();itr++)
+  //{
+  //  if(itr->second > 30)
+  //  {
+  //    map_lines.insert(itr->first.second);
+  //  }
+  //}*/
 
 #if NEW_UNIFORM_SAMPLING
   // Index of free space
@@ -1228,6 +1233,9 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     //this->pf_odom_pose = pose;
   }
 
+  //andy to store the ldata.ranges
+  std::vector<double> scan_ranges;
+
   bool resampled = false;
   // If the robot has moved, update the filter
   if(lasers_update_[laser_index])
@@ -1291,23 +1299,23 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       // Compute bearing
       ldata.ranges[i][1] = angle_min +
               (i * angle_increment);
+      //andy to store the laser ranges
+      scan_ranges.push_back(ldata.ranges[i][0]);
     }
-     
+
     if(m_force_update){
     boost::recursive_mutex::scoped_lock prl(configuration_mutex_);
- 
-    
     //andy local scan hough transform
-    std::vector<std::pair<int,int> > scan_points;
+    /*std::vector<std::pair<int,int> > scan_points;
     std::map<std::pair<int,double>,int> local_accumulator;
     for(int i = 0;i < ldata.range_count;i++)
     {
       scan_points.push_back(std::make_pair(ldata.ranges[i][0] * std::cos(ldata.ranges[i][1]) / 0.05,ldata.ranges[i][0] * std::sin(ldata.ranges[i][1]) / 0.05));
-    }
+    }*/
 
     double delta_theta = 2 * M_PI / 360/*ldata.range_count*/;
 
-    for(std::vector<std::pair<int,int> >::iterator itr = scan_points.begin();itr != scan_points.end();itr++)
+    /*for(std::vector<std::pair<int,int> >::iterator itr = scan_points.begin();itr != scan_points.end();itr++)
     {
       for(int k = 0; k < ldata.range_count;k += 4)
       {
@@ -1317,29 +1325,30 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
         if(r >= 0)
           local_accumulator[temp]++;
       }
-    }
+    }*/
 
     std::set<double> local_lines;
 
-    for(std::map<std::pair<int,double>,int>::iterator itr = local_accumulator.begin();itr != local_accumulator.end();itr++)
+    /*for(std::map<std::pair<int,double>,int>::iterator itr = local_accumulator.begin();itr != local_accumulator.end();itr++)
     {
     
       if(itr->second > 20)
       {
         local_lines.insert(itr->first.second);
       }
-    }
+    }*/
     
     //no local line detected(try all the angles)
     if(local_lines.size() == 0)
     {
-      for(int i = 0;i < ldata.range_count;i += 4)
+      for(int i = 0;i < ldata.range_count;i += 6)
         local_lines.insert(i * delta_theta);
     } 
     
     //possible angles
     std::set<double> possible_angles;
-    for(std::set<double>::iterator map_itr = map_lines.begin();map_itr != map_lines.end();map_itr++)
+    possible_angles = local_lines;
+    /*for(std::set<double>::iterator map_itr = map_lines.begin();map_itr != map_lines.end();map_itr++)
     {
       for(std::set<double>::iterator local_itr = local_lines.begin();local_itr != local_lines.end();local_itr++)
       {
@@ -1365,7 +1374,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
             possible_angles.insert(angle);    
         }
       }
-    }
+    }*/
    
     /*for(std::set<double>::iterator itr = possible_angles.begin();itr != possible_angles.end();itr++)
       std::cout << *itr << std::endl;*/
@@ -1383,9 +1392,13 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
           robot_scan[i][j] = ldata.ranges[j - i][0];
       }
     }*/
+    
+    double difference;
+    const double threshold = 0.15;
+    const double n_threshold = -0.15;
 
     const int angle_num = possible_angles.size();
-    const int array_size =  ldata.range_count;
+    const int array_size =  possible_angles.size();//ldata.range_count;
     double robot_scan[angle_num][array_size][2];
     int flag = 0;
     for(std::set<double>::iterator itr = possible_angles.begin();itr != possible_angles.end();itr++)
@@ -1393,10 +1406,12 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       int interval = double((*itr) / (2 * M_PI)) * ldata.range_count;
       for(int j = 0;j < array_size;j++)
       {
-        if(interval - j > 0)
-          robot_scan[flag][j][0] = ldata.ranges[array_size - (interval - j)][0];
+        //scale for j
+        int j_ = 6 * j;
+        if(interval - j_ > 0)
+          robot_scan[flag][j][0] = ldata.ranges[/*array_size*/360 - (interval - j_)][0];
         else
-          robot_scan[flag][j][0] = ldata.ranges[j - interval][0];
+          robot_scan[flag][j][0] = ldata.ranges[j_ - interval][0];
       }
       robot_scan[flag][0][1] = *itr;
       flag++;
@@ -1422,20 +1437,32 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       
       int curr_best = 0;
       double heading_angle = 0.0;
+      int good_range_count = 0;
       //angle traverse
-      for(int i = 0; i < angle_num/*array_size*/;i++)
+      for(int i = 0; i < angle_num;i++)
       {
-        double sq_distance = 0.0;
-        int good_range_count = 0;
-        for(int j = 0;j < array_size;j += 6)
+        good_range_count = 0;
+        int bad_count = 0;
+        for(int j = 0;j < 10;j++)
         {
-          if(/*std::abs(curr_ranges[j] - robot_scan[i][j]) < 0.1*/curr_ranges[j / 6] - robot_scan[i][j][0] > -0.15 && curr_ranges[j / 6] - robot_scan[i][j][0] < 0.15)
+          difference = curr_ranges[j * 6] - robot_scan[i][j * 6][0];
+          if(difference < -0.5 || difference > 0.5)
+          {
+            bad_count++;
+          }
+        }
+        if(bad_count > 5)
+          continue;
+        for(int j = 0;j < array_size;j++)
+        {
+          difference = curr_ranges[j] - robot_scan[i][j][0];
+          if(difference > n_threshold && difference < threshold)
             good_range_count++;
         }
         if(good_range_count > curr_best)
         {
           curr_best = good_range_count;
-          heading_angle = /*i * 2 * M_PI / ldata.range_count*/robot_scan[i][0][1];
+          heading_angle = robot_scan[i][0][1];
         }
       }
       if(curr_best > best_points[49].second.first)
@@ -1508,8 +1535,8 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   {
     if (!resampled)
     {
-	    // re-compute the cluster statistics
-	    pf_cluster_stats(pf_, pf_->sets);
+       // re-compute the cluster statistics
+       pf_cluster_stats(pf_, pf_->sets);   
     }
     // Read out the current hypotheses
     double max_weight = 0.0;
@@ -1561,6 +1588,28 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       p.pose.pose.position.y = hyps[max_weight_hyp].pf_pose_mean.v[1];
       tf::quaternionTFToMsg(tf::createQuaternionFromYaw(hyps[max_weight_hyp].pf_pose_mean.v[2]),
                             p.pose.pose.orientation);
+
+      //andy to obtain the reference laser range data from the estimated current pose
+      std::vector<double> reference_scans;
+      for(int i = 0;i < 360/*ldata.range_count*/;i++)
+      {
+        double theta = i * 2 * M_PI / 360 + hyps[max_weight_hyp].pf_pose_mean.v[2] + M_PI;
+        double range = map_calc_range(map_, hyps[max_weight_hyp].pf_pose_mean.v[0], hyps[max_weight_hyp].pf_pose_mean.v[1], theta, 10.0);
+        reference_scans.push_back(range);
+      }
+
+      //andy to examine the likelihood between the laser scan and the reference scan
+      int num = 0;
+      for(int i = 0;i < 360;i++)
+      {
+        if(abs(reference_scans[i] - scan_ranges[i]) < 0.1)
+          num++;
+      }
+      if(num < 200 && detection_count % 20 == 0)
+        m_force_update = true;
+      detection_count++;
+      
+
       // Copy in the covariance, converting from 3-D to 6-D
       pf_sample_set_t* set = pf_->sets + pf_->current_set;
       for(int i=0; i<2; i++)
